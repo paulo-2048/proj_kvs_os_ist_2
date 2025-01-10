@@ -1,0 +1,11 @@
+WRITE [(a,anna)(b,bernardo)]
+WAIT 10000
+WRITE [(d,dinis)(c,carlota)]
+READ [x,z,l,v]
+SHOW
+WAIT 4000000
+BACKUP
+DELETE [c]
+READ [c]
+WAIT 1000
+SHOW
