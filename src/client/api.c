@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <string.h>
 #include <stdlib.h>
+#include <pthread.h>
 
 // int req_pipe_fd = -1;
 // int resp_pipe_fd = -1;
@@ -54,9 +55,87 @@ int check_pipe_fd(int fd)
   return 0;
 }
 
-// Helper function to handle with requests
+// Thread function to handle with notifications from the server
+void parse_notification(const char *message, char *key, char *value)
+{
 
-// Helper function to handle with responses
+  // Debug message
+  printf("Raw message received: '%s'\n", message);
+
+  // Copia os 40 primeiros caracteres para a chave.
+  strncpy(key, message, MAX_STRING_SIZE);
+  key[MAX_STRING_SIZE] = '\0'; // Garante a terminação.
+
+  // Trim key
+  size_t key_len = strlen(key);
+  while (key_len > 0 && key[key_len - 1] == ' ')
+  {
+    key_len--;
+    key[key_len] = '\0';
+  }
+
+  // Copia os próximos 40 caracteres para o valor.
+  strncpy(value, message + MAX_STRING_SIZE, MAX_STRING_SIZE);
+  value[MAX_STRING_SIZE] = '\0'; // Garante a terminação.
+
+  // Trim value
+  size_t value_len = strlen(value);
+  while (value_len > 0 && value[value_len - 1] == ' ')
+  {
+    value_len--;
+    value[value_len] = '\0';
+  }
+}
+
+void *notification_handler(void *arg)
+{
+  while (1)
+  {
+    char buffer[2 * (MAX_STRING_SIZE + 1)] = {0};
+
+    printf("Waiting for notification...\n");
+    int notif_pipe_fd = open(saved_notif_pipe_path, O_RDONLY);
+    if (notif_pipe_fd == -1)
+    {
+      perror("Failed to open notification pipe");
+      return NULL;
+    }
+
+    ssize_t bytes_read = read(notif_pipe_fd, buffer, sizeof(buffer) - 1);
+    if (bytes_read <= 0)
+    {
+      if (bytes_read == 0)
+      {
+        // EOF: O servidor fechou o pipe.
+        printf("Notification pipe closed by server.\n");
+      }
+      else
+      {
+        perror("Failed to read from notification pipe");
+      }
+      close(notif_pipe_fd);
+      return NULL;
+    }
+
+    // Garante que o buffer seja sempre terminado.
+    buffer[bytes_read] = '\0';
+
+    // Separa chave e valor.
+    char key[MAX_STRING_SIZE + 1] = {0};
+    char value[MAX_STRING_SIZE + 1] = {0};
+    parse_notification(buffer, key, value);
+
+    // Exibe a notificação formatada.
+    printf("\n------- NOTIFICATION -------\n");
+    printf("Key: '%s'\n", key);
+    printf("Value: '%s'\n", value);
+    printf("---------------------------\n\n");
+
+    close(notif_pipe_fd);
+  }
+
+  return NULL;
+}
 
 int kvs_connect(char const *req_pipe_path, char const *resp_pipe_path, char const *notif_pipe_path, char const *server_pipe_path)
 {
@@ -117,7 +196,6 @@ int kvs_connect(char const *req_pipe_path, char const *resp_pipe_path, char cons
   }
 
   printf("Connection request sent successfully\n");
-
   // Open the receive server response to connection request
   printf("Open the receive server response to connection request\n");
   int resp_pipe_fd = open(resp_pipe_path, O_RDONLY);
@@ -149,6 +227,15 @@ int kvs_connect(char const *req_pipe_path, char const *resp_pipe_path, char cons
 
   // Server returned <response-code> for operation: <connect|disconnect|subscribe|unsubscribe>
   printf("Server returned %d for operation: CONNECT\n", response);
+
+  // Open the notification pipe for reading
+  printf("Open the notification pipe for reading\n");
+  pthread_t *notification_thread;
+  if (pthread_create(&notification_thread, NULL, notification_handler, NULL) != 0)
+  {
+    perror("Failed to create notification thread");
+    return 1;
+  }
 
   printf("Pipes defined successfully\n");
   return 0;
@@ -251,7 +338,6 @@ int kvs_disconnect()
   printf("Successfully disconnected and cleaned up\n");
   return 0;
 }
-
 
 int kvs_subscribe(const char *key)
 {

@@ -1,6 +1,16 @@
 WRITE [(a,anna)(b,bernardo)]
 WAIT 10000
 WRITE [(d,dinis)(c,carlota)]
+WAIT 5000
+WRITE [(a,anna1)(b,bernardo1)]
+WAIT 5000
+WRITE [(a,anna2)(b,bernardo2)]
+WAIT 5000
+WRITE [(a,anna3)(b,bernardo3)]
+WAIT 5000
+WRITE [(a,anna4)(b,bernardo4)]
+WAIT 5000
+WRITE [(a,anna5)(b,bernardo5)]
 READ [x,z,l,v]
 SHOW
 WAIT 4000000

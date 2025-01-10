@@ -92,6 +92,60 @@ static int entry_files(const char *dir, struct dirent *entry, char *in_path,
   return 0;
 }
 
+// Notify client about changes in subscribed keys
+void format_message(const char *key, const char *value, char *formatted_msg)
+{
+  // Cria buffers de tamanho fixo para key e value com padding.
+  char padded_key[MAX_STRING_SIZE] = {0};
+  char padded_value[MAX_STRING_SIZE + 1] = {0};
+
+  // Copia a key e adiciona padding.
+  snprintf(padded_key, MAX_STRING_SIZE + 1, "%-40s", key);
+
+  // Copia o value e adiciona padding.
+  snprintf(padded_value, MAX_STRING_SIZE + 1, "%-40s", value);
+
+  // Concatena key e value no formato correto.
+  snprintf(formatted_msg, 2 * (MAX_STRING_SIZE + 1), "%s%s", padded_key, padded_value);
+}
+
+int notify_client(const char *key, const char *value)
+{
+  char formatted_msg[2 * (MAX_STRING_SIZE + 1)] = {0};
+  format_message(key, value, formatted_msg);
+
+  for (int i = 0; i < MAX_NUMBER_SESSIONS; i++)
+  {
+    if (clients[i].id != -1 && clients[i].subscriptions[0][0] != '\0')
+    {
+      for (int j = 0; j < MAX_NUMBER_SUB; j++)
+      {
+        if (clients[i].subscriptions[j][0] != '\0' &&
+            strcmp(clients[i].subscriptions[j], key) == 0)
+        {
+          printf("Notifying client %d about key %s\n", i, key);
+
+          int notif_pipe_fd = open(clients[i].notif_pipe_path, O_WRONLY);
+          if (notif_pipe_fd == -1)
+          {
+            perror("Failed to open notification pipe");
+            return 1;
+          }
+          // Escreve a mensagem formatada no pipe.
+          if (write(notif_pipe_fd, formatted_msg, sizeof(formatted_msg)) == -1)
+          {
+            perror("Failed to write to notification pipe");
+            close(notif_pipe_fd);
+            return 1;
+          }
+          close(notif_pipe_fd);
+        }
+      }
+    }
+  }
+  return 0;
+}
+
 static int run_job(int in_fd, int out_fd, char *filename)
 {
   size_t file_backups = 0;
@@ -117,6 +171,13 @@ static int run_job(int in_fd, int out_fd, char *filename)
       {
         write_str(STDERR_FILENO, "Failed to write pair\n");
       }
+
+      // Notify clients about changes in subscribed keys
+      for (size_t i = 0; i < num_pairs; i++)
+      {
+        notify_client(keys[i], values[i]);
+      }
+
       break;
 
     case CMD_READ:
@@ -508,7 +569,6 @@ static void *client_manager_thread(void *arg)
     {
       sleep(1);
     }
-
 
     // Wait until clients[thread_id] is not NULL
     while (clients[thread_id].req_pipe_path == NULL)
