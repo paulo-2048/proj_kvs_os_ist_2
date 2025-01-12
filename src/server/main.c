@@ -11,6 +11,7 @@
 
 #include "constants.h"
 #include "../common/constants.h"
+#include "../common/protocol.h"
 #include "io.h"
 #include "operations.h"
 #include "parser.h"
@@ -412,6 +413,27 @@ int register_client(char *client_req_pipe_path, char *client_resp_pipe_path, cha
 // UNSUBSCRIBE [a]
 // DISCONNECT
 
+int send_response(const char *pipe_path, int op_code, char status)
+{
+  if (!pipe_path)
+  {
+    return -1;
+  }
+
+  int fd = open(pipe_path, O_WRONLY);
+  if (fd == -1)
+  {
+    perror("Failed to open response pipe");
+    return -1;
+  }
+
+  char response[2] = {op_code, status};
+  ssize_t bytes_written = write(fd, response, sizeof(response));
+  close(fd);
+
+  return (bytes_written == sizeof(response)) ? 0 : -1;
+}
+
 int handle_client_request(int client_id, char *command, char *args)
 {
   printf("Client %d: %s %s\n", client_id, command, args);
@@ -557,6 +579,82 @@ void clean_pipes(int thread_id)
   pthread_mutex_unlock(&client_thread_mutex);
 }
 
+int receive_response(const char *resp_pipe_path)
+{
+
+  char req_op_code;
+  if (!resp_pipe_path)
+  {
+    fprintf(stderr, "Invalid response pipe path\n");
+    return;
+  }
+
+  // Open the response pipe for reading
+  int pipe_fd = open(resp_pipe_path, O_RDONLY);
+  if (pipe_fd == -1)
+  {
+    perror("Failed to open response pipe");
+    return;
+  }
+
+  char buffer[MAX_STRING_SIZE * 3 + 2];
+  memset(buffer, 0, sizeof(buffer));
+
+  // Read response from pipe
+  ssize_t bytes_read = read(pipe_fd, buffer, sizeof(buffer) - 1); // Leave space for null terminator
+  if (bytes_read < 0)
+  {
+    perror("Failed to read response from pipe");
+    close(pipe_fd);
+    return;
+  }
+
+  // Close the pipe
+  close(pipe_fd);
+
+  // Null-terminate the buffer to safely use as a string
+  buffer[bytes_read] = '\0';
+
+  // Print the raw response
+  printf("Raw response: '%s'\n", buffer);
+
+  // Decode and handle the response
+  // Assume the response format starts with a status code followed by a message
+  int status_code = 0;
+  char message[MAX_STRING_SIZE * 3 + 2];
+  memset(message, 0, sizeof(message));
+
+  // Parse the response
+  // First character is OP_CODE
+  req_op_code = buffer[0];
+  int req_op_code_int = req_op_code - '0';
+
+  switch (req_op_code_int)
+  {
+  case OP_CODE_CONNECT:
+    printf("OP_CODE_CONNECT\n");
+    break;
+
+  case OP_CODE_SUBSCRIBE:
+    printf("OP_CODE_SUBSCRIBE\n");
+    break;
+
+  case OP_CODE_UNSUBSCRIBE:
+    printf("OP_CODE_UNSUBSCRIBE\n");
+    break;
+
+  case OP_CODE_DISCONNECT:
+    printf("OP_CODE_DISCONNECT\n");
+    break;
+
+  default:
+    fprintf(stderr, "Unsupported op_code: %c\n", req_op_code);
+    return 1;
+  }
+
+  return 0;
+}
+
 static void *client_manager_thread(void *arg)
 {
 
@@ -690,6 +788,8 @@ static void *hostess_thread()
 
     buffer[bytes_read] = '\0'; // Null terminate based on actual bytes read
 
+    printf("Received message: '%s\n", buffer);
+
     // Verify the message starts with "CONNECT ["
     if (strncmp(buffer, "CONNECT [", 9) != 0)
     {
@@ -725,9 +825,12 @@ static void *hostess_thread()
       continue; // Don't exit, just try next connection
     }
 
+    // OP_CODE + OP_STATUS
+    // OP_CODE: CONNECT - 1, DISCONNECT - 2, SUBSCRIBE - 3, UNSUBSCRIBE - 4
     // 0 - Success, 1 - Failure
     char response_status = status == 0 ? '0' : '1';
-    if (write(client_resp_fd, &response_status, sizeof(response_status)) == -1)
+    char server_response[2] = {'1', response_status};
+    if (write(client_resp_fd, server_response, sizeof(server_response)) == -1)
     {
       perror("Failed to write response");
     }

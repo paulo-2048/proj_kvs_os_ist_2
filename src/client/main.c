@@ -112,4 +112,25 @@ int main(int argc, char *argv[])
       break;
     }
   }
+
+  // Configure handler for SIGUSR1
+  
+  // struct sigaction sa;
+  // sa.sa_handler = sigusr1;
+  // sa.sa_flags = 0; // No additional flags
+  // sigaction(SIGUSR1, &sa, NULL);
+  // if (sigaction(SIGUSR1, &sa, NULL) != 0)
+
+  // // Set up a mask for SIGUSR1
+  // sigset_t mask;
+  // sigemptyset(&mask);
+  // sigaddset(&mask, SIGUSR1);
+
+  // if (pthread_sigmask(SIG_BLOCK, &mask, NULL) != 0)
+  // {
+  //     perror("Failed to block SIGUSR1");
+  // }
+
+  // // Simulate receiving the SIGUSR1 signal
+  // raise(SIGUSR1);
 }

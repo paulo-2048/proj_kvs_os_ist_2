@@ -14,12 +14,13 @@
 // int resp_pipe_fd = -1;
 // int notif_pipe_fd = -1;
 
-char *saved_req_pipe_path = NULL;
-char *saved_resp_pipe_path = NULL;
-char *saved_notif_pipe_path = NULL;
+const char *saved_server_pipe_path = NULL;
+const char *saved_req_pipe_path = NULL;
+const char *saved_resp_pipe_path = NULL;
+const char *saved_notif_pipe_path = NULL;
 
 // Helper function to safely delete existing pipes
-int remove_if_exists(const char *pipe_path)
+int remove_if_exists(char *pipe_path)
 {
   if (access(pipe_path, F_OK) == 0)
   {
@@ -33,7 +34,7 @@ int remove_if_exists(const char *pipe_path)
 }
 
 // Helper function to create a named pipe
-int create_pipe(const char *pipe_path)
+int create_pipe(char *pipe_path)
 {
   if (mkfifo(pipe_path, 0666) != 0)
   {
@@ -55,8 +56,205 @@ int check_pipe_fd(int fd)
   return 0;
 }
 
+// Helper function to print message in console
+// Server returned <response-code> for operation: <connect|disconnect|subscribe|unsubscribe>
+int log_message(char op_code, char op_status)
+{
+  char *operation;
+
+  // OP_CODE=1 - CONNECT
+  // OP_CODE=2 - DISCONNECT
+  // OP_CODE=3 - SUBSCRIBE
+  // OP_CODE=4 - UNSUBSCRIBE
+
+  switch (op_code)
+  {
+  case '1':
+    operation = "CONNECT";
+    break;
+  case '2':
+    operation = "DISCONNECT";
+    break;
+  case '3':
+    operation = "SUBSCRIBE";
+    break;
+  case '4':
+    operation = "UNSUBSCRIBE";
+    break;
+  default:
+    operation = "UNKNOWN";
+    break;
+  }
+
+  printf("Server returned %c for operation: %s\n", op_status, operation);
+  return 0;
+}
+
+// *Helpers to handle client-server communication
+// Helper function to send requests to the server
+// Utility function for padding strings to MAX_STRING_SIZE
+// Safely pad a string to a fixed size, ensuring null termination
+// Safely pad a string to a fixed size, ensuring null termination
+void pad_string(char *dest, const char *src, size_t max_size)
+{
+  if (!dest || !src || max_size == 0)
+  {
+    return;
+  }
+
+  size_t len = strlen(src);
+  if (len >= max_size)
+  {
+    len = max_size - 1; // Leave room for null terminator
+  }
+
+  memcpy(dest, src, len);
+  memset(dest + len, ' ', max_size - len); // Pad with spaces instead of nulls
+}
+
+// Helper function to send requests to the server
+int send_request(int op_code, const char *key)
+{
+  // Validate inputs
+  if (op_code < 0)
+  {
+    fprintf(stderr, "Invalid op_code: %d\n", op_code);
+    return 1;
+  }
+
+  if ((op_code == OP_CODE_SUBSCRIBE || op_code == OP_CODE_UNSUBSCRIBE) && !key)
+  {
+    fprintf(stderr, "Key required for subscribe/unsubscribe operations\n");
+    return 1;
+  }
+
+  // Determine pipe path
+  const char *pipe_path = (op_code == OP_CODE_CONNECT || op_code == OP_CODE_DISCONNECT)
+                              ? saved_server_pipe_path
+                              : saved_req_pipe_path;
+
+  // Prepare buffer
+  const size_t max_buffer_size = MAX_STRING_SIZE * 3 + 2;
+  char buffer[max_buffer_size];
+  memset(buffer, ' ', max_buffer_size); // Initialize with spaces
+
+  buffer[0] = '0' + op_code;
+  size_t offset = 1; // Start after op_code
+
+  // Build message based on operation type
+  switch (op_code)
+  {
+  case OP_CODE_CONNECT:
+    pad_string(buffer + offset, saved_req_pipe_path, MAX_STRING_SIZE);
+    offset += MAX_STRING_SIZE;
+    pad_string(buffer + offset, saved_resp_pipe_path, MAX_STRING_SIZE);
+    offset += MAX_STRING_SIZE;
+    pad_string(buffer + offset, saved_notif_pipe_path, MAX_STRING_SIZE);
+    offset += MAX_STRING_SIZE;
+    break;
+
+  case OP_CODE_SUBSCRIBE:
+  case OP_CODE_UNSUBSCRIBE:
+    pad_string(buffer + offset, key, MAX_STRING_SIZE);
+    offset += MAX_STRING_SIZE;
+    break;
+
+  case OP_CODE_DISCONNECT:
+    break;
+
+  default:
+    fprintf(stderr, "Unsupported op_code: %d\n", op_code);
+    return 1;
+  }
+
+  // Open and write to pipe
+  int pipe_fd = open(pipe_path, O_WRONLY);
+  if (pipe_fd == -1)
+  {
+    perror("Failed to open pipe");
+    return 1;
+  }
+
+  ssize_t bytes_written = write(pipe_fd, buffer, offset);
+  int result = 0;
+
+  if (bytes_written < 0 || (size_t)bytes_written != offset)
+  {
+    perror("Failed to write complete request");
+    result = 1;
+  }
+  else
+  {
+    printf("Request sent to server\n");
+    // Print raw request with all characters (including spaces)
+    printf("Raw request: '%s\n'", buffer);
+  }
+
+  close(pipe_fd);
+  return result;
+}
+
+// Helper function to receive responses from the server
+// Server always return 2 characters response code (OP_CODE + OP_STATUS)
+int receive_response()
+{
+  char res_op_code;
+  char res_op_status;
+
+  // Open the receive server response to connection request
+  printf("Open the receive server response to connection request\n");
+  int resp_pipe_fd = open(saved_resp_pipe_path, O_RDONLY);
+  if (resp_pipe_fd < 0)
+  {
+    perror("Failed to open response pipe");
+    return 1;
+  }
+
+  // Response buffer for OP_CODE and OP_STATUS (2 characters + null terminator)
+  char response_buffer[3] = "";
+  ssize_t bytes_read = read(resp_pipe_fd, response_buffer, 2); // Expect 2 bytes
+  if (bytes_read < 0)
+  {
+    perror("Failed to read response");
+    close(resp_pipe_fd);
+    return 1;
+  }
+  else if (bytes_read < 2)
+  {
+    fprintf(stderr, "Incomplete response received. Expected 2 bytes.\n");
+    close(resp_pipe_fd);
+    return 1;
+  }
+
+  close(resp_pipe_fd);
+
+  // Null-terminate the response to ensure safety
+  response_buffer[2] = '\0';
+
+  // Check the response from the server
+  printf("Check the response from the server\n");
+  printf("Raw response: %s\n", response_buffer);
+
+  // First character is OP_CODE
+  res_op_code = response_buffer[0];
+  // Second character is OP_STATUS
+  res_op_status = response_buffer[1];
+
+  printf("OP_CODE: %c\n", res_op_code);
+  printf("OP_STATUS: %c\n", res_op_status);
+
+  // Log the response
+  if (log_message(res_op_code, res_op_status) != 0)
+  {
+    perror("Failed to log server response message");
+    return 1;
+  }
+
+  return 0;
+}
+
 // Thread function to handle with notifications from the server
-void parse_notification(const char *message, char *key, char *value)
+void parse_notification(char *message, char *key, char *value)
 {
 
   // Debug message
@@ -157,76 +355,24 @@ int kvs_connect(char const *req_pipe_path, char const *resp_pipe_path, char cons
   }
 
   printf("Save file paths\n");
+  saved_server_pipe_path = server_pipe_path;
   saved_req_pipe_path = req_pipe_path;
   saved_resp_pipe_path = resp_pipe_path;
   saved_notif_pipe_path = notif_pipe_path;
 
   // Send connection request to server by server pipe (already initialized)
-  printf("Send connection request to server by server pipe: %s\n", server_pipe_path);
-  int server_pipe_fd = open(server_pipe_path, O_WRONLY);
-  if (server_pipe_fd == -1)
-  {
-    perror("Failed to open server pipe");
-    return 1;
-  }
-
-  // Comunicate with server using pipes (Connect to server)
-  printf("Communicate with server using pipes\n");
-  char buffer[MAX_STRING_SIZE] = "";
-
-  // Pass the fifo path to the server by message buffer
-  printf("Pass the fifo path to the server by message pipe\n");
-  strcat(buffer, "CONNECT [");
-  strcat(buffer, req_pipe_path);
-  strcat(buffer, ",");
-  strcat(buffer, resp_pipe_path);
-  strcat(buffer, ",");
-  strcat(buffer, notif_pipe_path);
-  strcat(buffer, "]");
-  strcat(buffer, "\n");
-  buffer[strlen(buffer)] = '\0'; // CONNECT [req_pipe_path,resp_pipe_path,notif_pipe_path]
-
-  printf("End of message buffer\n");
-  printf("Message buffer: %s\n", buffer);
-
-  if (write(server_pipe_fd, buffer, strlen(buffer)) < 0)
+  printf("Send connection request to server by server pipe\n");
+  if (send_request(OP_CODE_CONNECT, NULL) != 0)
   {
     perror("Failed to send connection request");
     return 1;
   }
 
-  printf("Connection request sent successfully\n");
-  // Open the receive server response to connection request
-  printf("Open the receive server response to connection request\n");
-  int resp_pipe_fd = open(resp_pipe_path, O_RDONLY);
-  if (resp_pipe_fd < 0)
+  if (receive_response() != 0)
   {
-    perror("Failed to open response pipe");
+    perror("Failed to receive response");
     return 1;
   }
-
-  // Reponse: 0 - Success, 1 - Error
-  char response_buffer[MAX_STRING_SIZE] = "";
-  printf("Reponse size: %lu\n", sizeof(response_buffer));
-  if (read(resp_pipe_fd, &response_buffer, MAX_STRING_SIZE) < 0)
-  {
-    perror("Failed to read response");
-    return 1;
-  }
-
-  close(resp_pipe_fd);
-
-  // Check the response from the server
-  printf("Check the response from the server\n");
-  int response = atoi(response_buffer);
-  if (response != 0)
-  {
-    fprintf(stderr, "Server returned %d for operation: CONNECT\n", response);
-    return 1;
-  }
-
-  // Server returned <response-code> for operation: <connect|disconnect|subscribe|unsubscribe>
-  printf("Server returned %d for operation: CONNECT\n", response);
 
   // Open the notification pipe for reading
   printf("Open the notification pipe for reading\n");
@@ -488,3 +634,27 @@ int kvs_unsubscribe(const char *key)
 
   return 0;
 }
+
+// void sigusr1(int signal)
+// {
+//   printf("Received SIGUSR1\n");
+
+//   if (saved_req_pipe_path == NULL || saved_resp_pipe_path == NULL || saved_notif_pipe_path == NULL)
+//   {
+//     fprintf(stderr, "Error: Pipes not initialized. Call kvs_connect() first.\n");
+//     return;
+//   }
+
+//   if (remove_if_exists(saved_req_pipe_path) != 0 ||
+//       remove_if_exists(saved_resp_pipe_path) != 0 ||
+//       remove_if_exists(saved_notif_pipe_path) != 0)
+//   {
+//     perror("Failed to delete pipes");
+//   }
+
+//   saved_req_pipe_path = NULL;
+//   saved_resp_pipe_path = NULL;
+//   saved_notif_pipe_path = NULL;
+
+//   printf("Successfully disconnected all clients\n");
+// }
