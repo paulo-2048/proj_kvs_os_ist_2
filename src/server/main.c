@@ -28,6 +28,8 @@ pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t n_current_backups_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t client_thread_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+volatile sig_atomic_t sigusr1_received = 0;
+
 size_t active_backups = 0; // Number of active backups
 size_t max_backups;        // Maximum allowed simultaneous backups
 size_t max_threads;        // Maximum allowed simultaneous threads
@@ -56,6 +58,12 @@ struct client_threads
 };
 
 struct client_threads client_threads[MAX_NUMBER_SESSIONS];
+
+void handle_sigusr1(int sig)
+{
+  printf("Received SIGUSR1 in Handle\n");
+  sigusr1_received = 1;
+}
 
 int filter_job_files(const struct dirent *entry)
 {
@@ -291,6 +299,7 @@ static int run_job(int in_fd, int out_fd, char *filename)
 // frees arguments
 static void *get_file(void *arguments)
 {
+  block_sigusr1();
   struct SharedData *thread_data = (struct SharedData *)arguments;
   DIR *dir = thread_data->dir;
   char *dir_name = thread_data->dir_name;
@@ -458,13 +467,26 @@ void clean_pipes(int thread_id)
   pthread_mutex_lock(&client_thread_mutex);
 
   // Clean pipe paths
-  free(clients[thread_id].req_pipe_path);
-  free(clients[thread_id].resp_pipe_path);
-  free(clients[thread_id].notif_pipe_path);
+  if (clients[thread_id].req_pipe_path)
+  {
+    unlink(clients[thread_id].req_pipe_path);
+    free(clients[thread_id].req_pipe_path);
+    clients[thread_id].req_pipe_path = NULL;
+  }
 
-  clients[thread_id].req_pipe_path = NULL;
-  clients[thread_id].resp_pipe_path = NULL;
-  clients[thread_id].notif_pipe_path = NULL;
+  if (clients[thread_id].resp_pipe_path)
+  {
+    unlink(clients[thread_id].resp_pipe_path);
+    free(clients[thread_id].resp_pipe_path);
+    clients[thread_id].resp_pipe_path = NULL;
+  }
+
+  if (clients[thread_id].notif_pipe_path)
+  {
+    unlink(clients[thread_id].notif_pipe_path);
+    free(clients[thread_id].notif_pipe_path);
+    clients[thread_id].notif_pipe_path = NULL;
+  }
 
   pthread_mutex_unlock(&client_thread_mutex);
 }
@@ -713,6 +735,8 @@ int receive_request(const char *pipe_path, int client_id)
 
 static void *client_manager_thread(void *arg)
 {
+  block_sigusr1();
+
   int thread_id = *(int *)arg;
 
   while (1)
@@ -735,13 +759,55 @@ static void *client_manager_thread(void *arg)
   return NULL;
 }
 
-static void *hostess_thread()
+void block_sigusr1(void)
 {
+  sigset_t mask;
+  sigemptyset(&mask);
+  sigaddset(&mask, SIGUSR1);
+  if (pthread_sigmask(SIG_BLOCK, &mask, NULL) != 0)
+  {
+    perror("pthread_sigmask block");
+  }
+}
+
+static void *hostess_thread(void *arg)
+{
+
+  sigset_t mask;
+  sigemptyset(&mask);
+
   printf("Thread hostess pipe started\n");
   printf("Waiting for client connection...\n");
   while (1)
   {
-    int status;
+    sigaddset(&mask, SIGUSR1);
+    if (pthread_sigmask(SIG_UNBLOCK, &mask, NULL) != 0)
+    {
+      perror("pthread_sigmask hostess");
+      return NULL;
+    }
+
+    printf("Waiting for client connection...\n");
+    sleep(1);
+
+    printf("sigusr1_received: %d\n", sigusr1_received);
+    // Handle SIGUSR1
+    if (sigusr1_received)
+    {
+      printf("SIGUSR1 received in hostess thread\n");
+
+      // Elimina todas as subscrições e encerra os FIFOs
+      for (int i = 0; i < MAX_NUMBER_SESSIONS; i++)
+      {
+        if (client_threads[i].free == 0)
+        {
+          clean_pipes(i);
+          free_thread(i);
+        }
+      }
+      sigusr1_received = 0;
+      printf("All clients terminated\n");
+    }
 
     // Receive Request - Register client - Send Response
     receive_request(server_pipe_path, -1);
@@ -845,6 +911,12 @@ int init_server_pipe()
 
 int main(int argc, char **argv)
 {
+  struct sigaction sa;
+  sa.sa_handler = handle_sigusr1;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0;
+  sigaction(SIGUSR1, &sa, NULL);
+
   if (argc < 5)
   {
     write_str(STDERR_FILENO, "Usage: ");

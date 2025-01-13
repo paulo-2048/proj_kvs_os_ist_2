@@ -22,7 +22,7 @@ const char *saved_notif_pipe_path = NULL;
 // Helper function to safely delete existing pipes
 int remove_if_exists(char *pipe_path)
 {
-  if (access(pipe_path, F_OK) == 0)
+  if (check_pipe_path(pipe_path) == 0)
   {
     if (unlink(pipe_path) != 0)
     {
@@ -30,6 +30,16 @@ int remove_if_exists(char *pipe_path)
       return -1;
     }
   }
+  return 0;
+}
+
+int check_pipe_path(char *pipe_path)
+{
+  if (access(pipe_path, F_OK) != 0)
+  {
+    return 1;
+  }
+
   return 0;
 }
 
@@ -42,17 +52,6 @@ int create_pipe(char *pipe_path)
     return -1;
   }
 
-  return 0;
-}
-
-// Helper function to check pipe file descriptors
-int check_pipe_fd(int fd)
-{
-  if (fd == -1)
-  {
-    perror("Failed to open pipe");
-    return -1;
-  }
   return 0;
 }
 
@@ -168,6 +167,13 @@ int send_request(int op_code, const char *key)
     return 1;
   }
 
+  // Check if pipe exists (if not is because server closed)
+  if (check_pipe_path(pipe_path) != 0)
+  {
+    fprintf(stderr, "Pipe not found (closed by server) : %s\n", pipe_path);
+    exit(1);
+  }
+
   // Open and write to pipe
   int pipe_fd = open(pipe_path, O_WRONLY);
   if (pipe_fd == -1)
@@ -202,6 +208,12 @@ int receive_response()
 {
   char res_op_code;
   char res_op_status;
+
+  if (check_pipe_path(saved_resp_pipe_path) != 0)
+  {
+    fprintf(stderr, "Pipe not found (closed by server) : %s\n", saved_resp_pipe_path);
+    exit(1);
+  }
 
   // Open the receive server response to connection request
   // printf("Open the receive server response to connection request\n");
@@ -293,6 +305,12 @@ void *notification_handler(void *arg)
   {
     char buffer[2 * (MAX_STRING_SIZE + 1)] = {0};
 
+    if (check_pipe_path(saved_notif_pipe_path) != 0)
+    {
+      fprintf(stderr, "Pipe not found (closed by server) : %s\n", saved_notif_pipe_path);
+      exit(1);
+    }
+
     // printf("Waiting for notification...\n");
     int notif_pipe_fd = open(saved_notif_pipe_path, O_RDONLY);
     if (notif_pipe_fd == -1)
@@ -372,7 +390,6 @@ int kvs_connect(char const *req_pipe_path, char const *resp_pipe_path, char cons
     perror("Failed to send connection request");
     return 1;
   }
-  
 
   if (receive_response() != 0)
   {
