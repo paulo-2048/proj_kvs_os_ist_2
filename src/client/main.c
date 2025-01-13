@@ -40,7 +40,7 @@ int main(int argc, char *argv[])
     return 1;
   }
 
-  printf("Client initialized\n");
+  // printf("Client initialized\n");
 
   while (1)
   {
@@ -53,7 +53,7 @@ int main(int argc, char *argv[])
         return 1;
       }
       // TODO: end notifications thread
-      printf("Disconnected from server\n");
+      // printf("Disconnected from server\n");
       return 0;
 
     case CMD_SUBSCRIBE:
@@ -114,7 +114,7 @@ int main(int argc, char *argv[])
   }
 
   // Configure handler for SIGUSR1
-  
+
   // struct sigaction sa;
   // sa.sa_handler = sigusr1;
   // sa.sa_flags = 0; // No additional flags
